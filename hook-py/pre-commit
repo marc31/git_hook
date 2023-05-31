@@ -1,0 +1,96 @@
+#!/usr/bin/env python
+
+import logging
+import os
+import subprocess
+
+from pathlib import Path
+class betterPrint:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    
+    def blue(txt):
+        print(betterPrint.BLUE + txt + betterPrint.ENDC)
+    
+    def cyan(txt):
+        print(betterPrint.CYAN + txt + betterPrint.ENDC)
+    
+    def green(txt):
+        print(betterPrint.GREEN + txt + betterPrint.ENDC)
+
+    def warning(txt):
+        print(betterPrint.WARNING + txt + betterPrint.ENDC)
+    
+    def error(txt):
+        print(betterPrint.FAIL + betterPrint.BOLD + txt + betterPrint.ENDC) 
+                  
+# @todo transform this to a class
+
+def initLogger(file):
+    # Create path if do not exist
+    path = os.path.dirname(os.path.abspath(file))
+    Path(path).mkdir(parents=True, exist_ok=True)
+    
+    try:
+        logging.basicConfig(filename=file, encoding='utf-8', level=logging.DEBUG)
+    except:
+        logging.basicConfig(filename=file, level=logging.DEBUG)
+        
+    logger = logging.getLogger(__name__)
+
+    return logger
+
+# Helper to run program
+def run(program, command, cwd = './', toPrint=False):
+    args = [program] + command.split()
+    
+    if toPrint == True:
+        betterPrint.cyan(' '.join(args))
+        
+    p = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE)
+    return p.stdout.read().strip()
+
+# Helper to git program
+def git(command):
+    return run('git', command)
+
+# Get commit file list
+def getCommitFileList():
+    return git('diff --cached --name-only --diff-filter=ACM').decode().split('\n')
+
+def checkIfIsFirstCommit():
+    # Check if this is the initial commit
+    if git('rev-parse --verify HEAD'):
+        return 'HEAD'
+    else:
+        # Frist commit hash is a magic commit ID that represents an empty commit.
+        return '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+    
+def main():
+    global commit
+    
+    commit = {}
+    # hash = checkIfIsFirstCommit()
+    files = getCommitFileList()
+    
+    for file in files:
+        print(file)
+   
+
+if __name__ == '__main__':
+    global logger
+
+    logger = initLogger(os.path.join(os.path.abspath('.'), 'hook-log', 'pre-commit'))
+
+    try:
+        main()
+    except:
+        logger.exception('Encountered an exception in the main loop.')

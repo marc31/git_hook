@@ -1,0 +1,227 @@
+#!/usr/bin/env python
+
+import sys
+import logging
+import os
+import subprocess
+
+from pathlib import Path
+from shutil import which
+
+class betterPrint:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    
+    def blue(txt):
+        print(betterPrint.BLUE + txt + betterPrint.ENDC)
+    
+    def cyan(txt):
+        print(betterPrint.CYAN + txt + betterPrint.ENDC)
+    
+    def green(txt):
+        print(betterPrint.GREEN + txt + betterPrint.ENDC)
+
+    def warning(txt):
+        print(betterPrint.WARNING + txt + betterPrint.ENDC)
+    
+    def error(txt):
+        print(betterPrint.FAIL + betterPrint.BOLD + txt + betterPrint.ENDC) 
+                  
+# @todo transform this to a class
+
+
+
+def initLogger(file):
+    # Create path if do not exist
+    path = os.path.dirname(os.path.abspath(file))
+    Path(path).mkdir(parents=True, exist_ok=True)
+    
+    try:
+        logging.basicConfig(filename=file, encoding='utf-8', level=logging.DEBUG)
+    except:
+        logging.basicConfig(filename=file, level=logging.DEBUG)
+        
+    logger = logging.getLogger(__name__)
+
+    return logger
+
+# Helper to run program
+def run(program, command, cwd = './', toPrint=False):
+    args = [program] + command.split()
+    
+    if toPrint == True:
+        betterPrint.cyan(' '.join(args))
+        
+    p = subprocess.Popen(args, cwd=cwd, stdout=subprocess.PIPE)
+    return p.stdout.read().strip()
+
+# Helper to git program
+def git(command):
+    return run('git', command)
+
+# Helper to git log
+def gitLog(format_code, ref_name):
+    return git('log -n 1 --format=%s %s' % (format_code, ref_name))
+
+# Get commit file list
+def getCommitFileList():
+    return git('diff --name-only %s %s' % (commit['old'], commit['new'])).decode().split('\n')
+
+# Read from stdin commit old hash, new and branch ref
+# add fill commit global var with usefull info
+def getCommitInfo():
+   
+    for line in sys.stdin.readlines():
+        commit['old'], commit['new'], commit['ref'] = line.strip().split(' ')
+            
+    commit['user'] = gitLog('%cn', commit['ref'])
+    commit['email'] = gitLog('%ce', commit['ref'])
+    commit['date'] = gitLog('%ad', commit['ref'])
+    commit['subject'] = gitLog('%s', commit['ref'])
+    commit['body'] = gitLog('%b', commit['ref'])
+
+    commit['files'] = getCommitFileList()
+    
+    commit['branch'] = commit['ref'].split('/heads/')[1]
+    
+    return commit
+
+def deploy():
+    # Check if is branch to deploy
+    if commit['branch'] not in branchToDeploy:
+        betterPrint.blue("%s branch is not in deploy branch %s" % (commit['branch'], branchToDeploy))
+        return False
+    
+    # Check if target dir exist
+    path = os.path.abspath(targetDir)
+    if not os.path.isdir(path):
+        betterPrint.warning("Create deploy directory %s" % path)
+        Path(path).mkdir(parents=True)
+      
+    # Deploy branch to target
+    betterPrint.blue("Deploying %s branch" % commit['branch'])
+    git("--work-tree=%s --git-dir=%s checkout --force %s" % (targetDir, gitBareDir, commit['branch']))
+    
+    return True
+
+def checkNpm():
+    return isExecWorking(npmExe)
+
+def checkComposer():
+    return isExecWorking(composerExe)
+        
+def isExecWorking(name):
+    # Check whether `name` is on PATH and marked as executable
+
+    return which(name) is not None
+
+def installPhpDep():
+    # Install new composer dep
+    if any(file in commit['files'] for file in ('composer.lock', 'composer.json')):
+        # Check composer
+        if (checkComposer()):
+            betterPrint.blue('Install new composer dep')
+            run(composerExe, 'install', cwd=targetDir)
+        else:
+            betterPrint.warning('Composer is not present on server')
+
+def installNodeDep():
+    # Install new node dep
+    if any(file in commit['files'] for file in ('package.json', 'package-lock.json')):
+        if (checkNpm()):
+            betterPrint.blue('Install new npm dep')
+            run(npmExe, 'install', cwd=targetDir)
+        else:
+            betterPrint.warning('Npm is not present on server')  
+
+def buildFrontApp():
+    # Build the app
+    if not (checkNpm()):
+        betterPrint.warning('Npm is not present on server. We cannot build the front')
+    else:
+        run(npmExe, 'run build', cwd=targetDir)
+
+def checkIfEnvFile():
+    # Check if .env file
+    if not os.path.isfile(os.path.join(targetDir, '.env')):
+        betterPrint.error('no .env file')    
+
+
+def runMigrate():
+    # Run artisan migrate if in body commit message include migrate
+    if '!migrate' in commit['body'].decode():
+        run(phpExec, 'artisan db:wipe --force', cwd=targetDir, toPrint=True)
+        run('sleep', '2', cwd=targetDir, toPrint=True)
+        run(phpExec, 'artisan migrate --seed --force' , cwd=targetDir, toPrint=True)     
+        
+def runCache():
+    run(phpExec, 'artisan shield:generate --all', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan config:cache', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan route:cache', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan view:cache', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan icons:cache', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan livewire:discover', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan event:cache', cwd=targetDir, toPrint=True)
+    run(phpExec, 'artisan optimize', cwd=targetDir, toPrint=True)
+
+def main():
+    global commit
+    global targetDir
+    global gitBareDir
+    global branchToDeploy
+    
+    global npmExe
+    global composerExe
+    global phpExec
+    
+    npmExe = 'npm'
+    composerExe = 'composer'
+    phpExec = 'php'
+    
+    # the directory where the files need to be deployed
+    targetDir="../target"      
+    # the current git bare repository path
+    gitBareDir="../server"
+    # the branch to deploy (default to `production`)
+    branchToDeploy=["prod"]                          
+
+    targetDir=os.path.abspath(targetDir)
+    gitBareDir=os.path.abspath(gitBareDir)
+    
+    commit = {}
+ 
+    getCommitInfo()
+    
+    deployed = deploy()
+    
+    if (deployed):            
+        installPhpDep()
+        installNodeDep()
+                    
+        buildFrontApp()
+            
+        checkIfEnvFile()
+        
+        runMigrate()
+        runCache()
+        
+    # logger.info(commit)
+    
+    print(commit)
+
+if __name__ == '__main__':
+    global logger
+    
+    logger = initLogger(os.path.join(os.path.abspath('.'), 'hook-log', 'post-receive'))
+
+    try:
+        main()
+    except:
+        logger.exception('Encountered an exception in the main loop.')

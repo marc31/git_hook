@@ -1,0 +1,30 @@
+#!/bin/bash
+
+# Le chemin où les fichiers doivent être déployer sur le serveur
+TARGET_DIR="/home/adekua/adekuav2"
+
+# Le chemin du dépôt bare
+GIT_BARE_DIR="/home/adekua/adekuav2_ci.git"
+
+# La branche qui initialise un déploiement
+BRANCH="prod"
+
+while read oldrev newrev ref; do
+    # Vérifie la branche
+    if [[ $ref = refs/heads/$BRANCH ]]; then
+        echo "Ref '$ref' received."
+
+        if [ ! -d "$TARGET" ]; then
+                echo "'${TARGET_DIR}' dir is missing, creating it"
+                mkdir -p $TARGET_DIR
+        fi
+
+        echo "Deploying '${BRANCH}' branch to production"
+        git --work-tree=$TARGET_DIR --git-dir=$GIT_BARE_DIR checkout --force $BRANCH
+
+        exit 0
+    else
+        echo "$ref branch is not in deploy branch ${BRANCH}"
+        exit 0
+    fi
+done
